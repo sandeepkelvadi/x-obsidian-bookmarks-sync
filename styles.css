@@ -1,0 +1,64 @@
+.x-bookmarks-sync-settings .setting-item-heading {
+	margin-top: 1.5em;
+}
+
+.x-bookmarks-sync-settings .auth-status {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 8px 12px;
+	border-radius: 6px;
+	margin-bottom: 12px;
+}
+
+.x-bookmarks-sync-settings .auth-status.connected {
+	background-color: var(--background-modifier-success);
+	color: var(--text-success);
+}
+
+.x-bookmarks-sync-settings .auth-status.disconnected {
+	background-color: var(--background-modifier-error);
+	color: var(--text-error);
+}
+
+.x-bookmarks-sync-settings .setup-instructions {
+	background-color: var(--background-secondary);
+	padding: 12px 16px;
+	border-radius: 6px;
+	margin-bottom: 16px;
+	font-size: 0.85em;
+	line-height: 1.5;
+}
+
+.x-bookmarks-sync-settings .setup-instructions code {
+	background-color: var(--background-modifier-border);
+	padding: 2px 4px;
+	border-radius: 3px;
+}
+
+.sync-status-modal .sync-progress {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	padding: 16px 0;
+}
+
+.sync-status-modal .sync-stat {
+	display: flex;
+	justify-content: space-between;
+	padding: 4px 0;
+}
+
+.sync-status-modal .sync-stat-label {
+	color: var(--text-muted);
+}
+
+.sync-status-modal .sync-stat-value {
+	font-weight: 600;
+}
+
+.sync-status-modal .sync-current-status {
+	color: var(--text-muted);
+	font-style: italic;
+	margin-top: 8px;
+}

@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Build output (included in GitHub Releases, not in source)
+main.js
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment / secrets
+.env
+.env.*
+
+# Claude Code
+.claude/
+
+# Editor
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# npm
+*.tgz
+npm-debug.log*

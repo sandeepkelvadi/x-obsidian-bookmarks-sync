@@ -1,0 +1,9 @@
+{
+	"id": "x-bookmarks-sync",
+	"name": "X Bookmarks Sync",
+	"version": "1.0.0",
+	"minAppVersion": "1.4.0",
+	"description": "Sync your X.com (Twitter) bookmarks as Obsidian notes with full frontmatter metadata",
+	"author": "Sandeep Kelvadi",
+	"isDesktopOnly": true
+}
