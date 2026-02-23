@@ -109,6 +109,10 @@ export function transformTweet(
 		filename,
 		body,
 		tweetId: tweet.id,
+		x_likes: tweet.public_metrics?.like_count ?? 0,
+		x_reposts: tweet.public_metrics?.retweet_count ?? 0,
+		x_replies: tweet.public_metrics?.reply_count ?? 0,
+		x_bookmarks: tweet.public_metrics?.bookmark_count ?? 0,
 	};
 }
 
@@ -152,6 +156,10 @@ export function noteToMarkdown(note: BookmarkNote): string {
 	if (note.published_date) {
 		lines.push(`published_date: ${note.published_date}`);
 	}
+	lines.push(`x_likes: ${note.x_likes}`);
+	lines.push(`x_reposts: ${note.x_reposts}`);
+	lines.push(`x_replies: ${note.x_replies}`);
+	lines.push(`x_bookmarks: ${note.x_bookmarks}`);
 
 	lines.push("---");
 	lines.push("");

@@ -120,4 +120,8 @@ export interface BookmarkNote {
 	filename: string;
 	body: string;
 	tweetId: string;
+	x_likes: number;
+	x_reposts: number;
+	x_replies: number;
+	x_bookmarks: number;
 }
