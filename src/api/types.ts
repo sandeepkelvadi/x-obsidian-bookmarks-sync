@@ -105,6 +105,23 @@ export interface XTokenResponse {
 	scope: string;
 }
 
+export interface XBookmarkFolder {
+	id: string;
+	name: string;
+}
+
+export interface XBookmarkFoldersResponse {
+	data?: XBookmarkFolder[];
+	meta?: {
+		result_count: number;
+	};
+	errors?: Array<{
+		title: string;
+		detail: string;
+		type: string;
+	}>;
+}
+
 export interface BookmarkNote {
 	title: string;
 	source: string;

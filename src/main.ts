@@ -1,4 +1,4 @@
-import { Notice, Plugin } from "obsidian";
+import { Notice, Plugin, TFile } from "obsidian";
 import {
 	XBookmarksSyncSettings,
 	DEFAULT_SETTINGS,
@@ -9,17 +9,24 @@ import {
 	buildAuthorizationUrl,
 	exchangeCodeForToken,
 	fetchCurrentUser,
+	ensureValidToken,
 } from "./auth/oauth";
 import type { PKCEState } from "./auth/oauth";
 import { SyncEngine } from "./sync/sync-engine";
 import { SyncStatusModal } from "./ui/sync-status-modal";
+import { XClient } from "./api/x-client";
+import { RepliesReviewer } from "./sync/replies-reviewer";
+import { Logger } from "./utils/logger";
 
 export default class XBookmarksSyncPlugin extends Plugin {
 	settings: XBookmarksSyncSettings = DEFAULT_SETTINGS;
 	private pkceState: PKCEState | null = null;
+	logger: Logger = new Logger(false);
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
+		this.logger = new Logger(this.settings.debugLogging);
+		this.logger.info("Plugin loaded");
 
 		// Register the obsidian:// protocol handler for OAuth callback
 		this.registerObsidianProtocolHandler(
@@ -68,6 +75,24 @@ export default class XBookmarksSyncPlugin extends Plugin {
 			name: "Connect X Account",
 			callback: async () => {
 				await this.startOAuthFlow();
+			},
+		});
+
+		this.addCommand({
+			id: "review-replies-current-note",
+			name: "Review Replies for Current Note",
+			checkCallback: (checking: boolean) => {
+				const activeFile = this.app.workspace.getActiveFile();
+				if (!activeFile) return false;
+				if (
+					!activeFile.path.startsWith(
+						this.settings.bookmarksFolderPath
+					)
+				)
+					return false;
+				if (checking) return true;
+				this.reviewRepliesForNote(activeFile);
+				return true;
 			},
 		});
 
@@ -213,6 +238,104 @@ export default class XBookmarksSyncPlugin extends Plugin {
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			modal.showError(msg);
+		}
+	}
+
+	private async reviewRepliesForNote(file: TFile): Promise<void> {
+		if (!this.settings.accessToken) {
+			this.showNotice("Not connected to X. Please connect your account first.");
+			return;
+		}
+		if (!this.settings.grokApiKey) {
+			this.showNotice("Grok API key required. Configure it in settings.");
+			return;
+		}
+
+		try {
+			const accessToken = await ensureValidToken(
+				this.settings,
+				this.saveSettings.bind(this)
+			);
+
+			// Extract tweet ID from frontmatter
+			const cache = this.app.metadataCache.getFileCache(file);
+			const link = cache?.frontmatter?.link || cache?.frontmatter?.source;
+			if (!link) {
+				this.showNotice("No tweet link found in note frontmatter.");
+				return;
+			}
+			const match = link.match(/status\/(\d+)/);
+			if (!match) {
+				this.showNotice("Could not extract tweet ID from note.");
+				return;
+			}
+			const tweetId = match[1];
+
+			this.showNotice("Fetching replies...");
+
+			const xClient = new XClient(this.logger);
+			const { tweet, includes } = await xClient.fetchTweetById(
+				tweetId,
+				accessToken
+			);
+
+			const reviewer = new RepliesReviewer(this.settings, this.logger);
+			const result = await reviewer.reviewTweet(
+				tweet,
+				includes,
+				accessToken
+			);
+
+			if (result.hasContent) {
+				let content = await this.app.vault.read(file);
+				content += "\n\n" + result.discussionSummary;
+				await this.app.vault.modify(file, content);
+				this.showNotice("Discussion summary added to note.");
+			} else {
+				this.showNotice("No notable replies found for this tweet.");
+			}
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			this.showNotice(`Replies review failed: ${msg}`);
+		}
+	}
+
+	async fetchAndCacheFolders(): Promise<void> {
+		if (!this.settings.accessToken) {
+			this.showNotice(
+				"Not connected to X. Please connect your account first."
+			);
+			return;
+		}
+
+		try {
+			const { ensureValidToken } = await import("./auth/oauth");
+			const accessToken = await ensureValidToken(
+				this.settings,
+				this.saveSettings.bind(this)
+			);
+
+			const xClient = new XClient(this.logger);
+			const response = await xClient.fetchBookmarkFolders(
+				this.settings.xUserId,
+				accessToken
+			);
+
+			if (response.data && response.data.length > 0) {
+				this.settings.cachedFolders = {};
+				for (const folder of response.data) {
+					this.settings.cachedFolders[folder.id] = folder.name;
+				}
+				await this.saveSettings();
+				this.showNotice(
+					`Found ${response.data.length} bookmark folder(s): ${response.data.map((f) => f.name).join(", ")}`
+				);
+			} else {
+				this.showNotice("No bookmark folders found on your X account.");
+			}
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			this.showNotice(`Failed to fetch folders: ${msg}`);
 		}
 	}
 

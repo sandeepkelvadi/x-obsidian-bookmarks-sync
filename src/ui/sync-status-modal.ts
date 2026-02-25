@@ -5,6 +5,7 @@ export class SyncStatusModal extends Modal {
 	private fetchedEl: HTMLElement;
 	private createdEl: HTMLElement;
 	private skippedEl: HTMLElement;
+	private reviewedEl: HTMLElement;
 	private currentStatusEl: HTMLElement;
 	private cancelled = false;
 
@@ -47,6 +48,16 @@ export class SyncStatusModal extends Modal {
 			cls: "sync-stat-value",
 		});
 
+		const reviewedRow = progressDiv.createDiv("sync-stat");
+		reviewedRow.createSpan({
+			text: "Replies reviewed:",
+			cls: "sync-stat-label",
+		});
+		this.reviewedEl = reviewedRow.createSpan({
+			text: "0",
+			cls: "sync-stat-value",
+		});
+
 		this.currentStatusEl = progressDiv.createDiv("sync-current-status");
 		this.currentStatusEl.setText("Starting...");
 
@@ -62,10 +73,16 @@ export class SyncStatusModal extends Modal {
 		});
 	}
 
-	updateProgress(fetched: number, created: number, skipped: number): void {
+	updateProgress(
+		fetched: number,
+		created: number,
+		skipped: number,
+		reviewed = 0
+	): void {
 		this.fetchedEl.setText(String(fetched));
 		this.createdEl.setText(String(created));
 		this.skippedEl.setText(String(skipped));
+		this.reviewedEl.setText(String(reviewed));
 	}
 
 	setStatus(status: string): void {

@@ -18,6 +18,19 @@ export interface XBookmarksSyncSettings {
 	defaultTags: string;
 	enableUrlTypeDetection: boolean;
 
+	// Bookmark folders
+	enableFolderTags: boolean;
+	folderTagPrefix: string;
+	cachedFolders: Record<string, string>; // folder id -> name
+
+	// Discussion summary (replies review)
+	enableRepliesReview: boolean;
+	grokApiKey: string;
+	maxRepliesToAnalyze: number;
+
+	// Debug
+	debugLogging: boolean;
+
 	syncedTweetIds: Record<string, string>;
 }
 
@@ -37,6 +50,16 @@ export const DEFAULT_SETTINGS: XBookmarksSyncSettings = {
 
 	defaultTags: "clippings",
 	enableUrlTypeDetection: true,
+
+	enableFolderTags: false,
+	folderTagPrefix: "",
+	cachedFolders: {},
+
+	enableRepliesReview: false,
+	grokApiKey: "",
+	maxRepliesToAnalyze: 10,
+
+	debugLogging: false,
 
 	syncedTweetIds: {},
 };
@@ -241,6 +264,124 @@ export class XBookmarksSyncSettingTab extends PluginSettingTab {
 					})
 			);
 
+		// --- Bookmark Folders Section ---
+		containerEl.createEl("h2", { text: "Bookmark Folders" });
+
+		const foldersDesc = containerEl.createDiv("setting-item-description");
+		foldersDesc.setText(
+			"Tag synced bookmarks with their X bookmark folder name. Requires the bookmarks folder API (may not be available on all API tiers)."
+		);
+		foldersDesc.style.marginBottom = "12px";
+
+		new Setting(containerEl)
+			.setName("Use folder names as tags")
+			.setDesc(
+				"Add the X bookmark folder name as a tag on each synced note"
+			)
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.enableFolderTags)
+					.onChange(async (value) => {
+						this.plugin.settings.enableFolderTags = value;
+						await this.plugin.saveSettings();
+						this.display();
+					})
+			);
+
+		if (this.plugin.settings.enableFolderTags) {
+			new Setting(containerEl)
+				.setName("Folder tag prefix")
+				.setDesc(
+					"Optional prefix for folder tags (e.g. \"x/\" → \"x/AI\", \"x/Design\")"
+				)
+				.addText((text) =>
+					text
+						.setPlaceholder("e.g. x/")
+						.setValue(this.plugin.settings.folderTagPrefix)
+						.onChange(async (value) => {
+							this.plugin.settings.folderTagPrefix = value;
+							await this.plugin.saveSettings();
+						})
+				);
+
+			const cachedFolderCount = Object.keys(
+				this.plugin.settings.cachedFolders
+			).length;
+
+			const folderListSetting = new Setting(containerEl)
+				.setName("Fetched folders")
+				.setDesc(
+					cachedFolderCount > 0
+						? Object.values(this.plugin.settings.cachedFolders).join(", ")
+						: "No folders fetched yet"
+				)
+				.addButton((btn) =>
+					btn
+						.setButtonText("Fetch Folders")
+						.onClick(async () => {
+							await this.plugin.fetchAndCacheFolders();
+							this.display();
+						})
+				);
+		}
+
+		// --- Discussion Summary Section ---
+		containerEl.createEl("h2", { text: "Discussion Summary" });
+
+		const repliesDesc = containerEl.createDiv("setting-item-description");
+		repliesDesc.setText(
+			"Analyze replies on bookmarked tweets using Grok AI. Requires an xAI API key."
+		);
+		repliesDesc.style.marginBottom = "12px";
+
+		new Setting(containerEl)
+			.setName("Enable replies review")
+			.setDesc(
+				"Automatically fetch and summarize replies for new bookmarks during sync"
+			)
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.enableRepliesReview)
+					.onChange(async (value) => {
+						this.plugin.settings.enableRepliesReview = value;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("Grok API key")
+			.setDesc(
+				"Your xAI API key for reply summarization (get one at console.x.ai)"
+			)
+			.addText((text) => {
+				text.setPlaceholder("Enter Grok API key")
+					.setValue(this.plugin.settings.grokApiKey)
+					.onChange(async (value) => {
+						this.plugin.settings.grokApiKey = value.trim();
+						await this.plugin.saveSettings();
+					});
+				text.inputEl.type = "password";
+			});
+
+		new Setting(containerEl)
+			.setName("Max replies to analyze")
+			.setDesc(
+				"Number of top-engagement replies to include in summary (default: 10)"
+			)
+			.addText((text) =>
+				text
+					.setPlaceholder("10")
+					.setValue(
+						String(this.plugin.settings.maxRepliesToAnalyze)
+					)
+					.onChange(async (value) => {
+						const num = parseInt(value) || 10;
+						this.plugin.settings.maxRepliesToAnalyze =
+							Math.max(1, Math.min(50, num));
+						await this.plugin.saveSettings();
+					})
+			);
+
 		// --- Sync Status Section ---
 		containerEl.createEl("h2", { text: "Sync Status" });
 
@@ -259,6 +400,20 @@ export class XBookmarksSyncSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Synced bookmarks")
 			.setDesc(`${syncedCount} bookmark(s) in sync index`);
+
+		new Setting(containerEl)
+			.setName("Enable debug logging")
+			.setDesc(
+				"Output detailed logs to the developer console (Ctrl+Shift+I)"
+			)
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.debugLogging)
+					.onChange(async (value) => {
+						this.plugin.settings.debugLogging = value;
+						await this.plugin.saveSettings();
+					})
+			);
 
 		new Setting(containerEl).setName("Actions").addButton((btn) =>
 			btn.setButtonText("Sync Now").setCta().onClick(async () => {

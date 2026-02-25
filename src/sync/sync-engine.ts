@@ -4,13 +4,16 @@ import type { XBookmarksResponse, XTweet } from "../api/types";
 import { XClient } from "../api/x-client";
 import { ensureValidToken } from "../auth/oauth";
 import { Deduplicator } from "./deduplicator";
+import { RepliesReviewer } from "./replies-reviewer";
 import { transformTweet, noteToMarkdown } from "../transform/tweet-to-note";
 import { SyncStatusModal } from "../ui/sync-status-modal";
+import type { Logger } from "../utils/logger";
 
 export interface SyncResult {
 	fetched: number;
 	created: number;
 	skipped: number;
+	reviewed: number;
 	errors: string[];
 }
 
@@ -20,17 +23,26 @@ export class SyncEngine {
 	private saveSettings: () => Promise<void>;
 	private xClient: XClient;
 	private deduplicator: Deduplicator;
+	private repliesReviewer: RepliesReviewer | null = null;
+	private logger?: Logger;
 
 	constructor(
 		app: App,
 		settings: XBookmarksSyncSettings,
-		saveSettings: () => Promise<void>
+		saveSettings: () => Promise<void>,
+		logger?: Logger
 	) {
 		this.app = app;
 		this.settings = settings;
 		this.saveSettings = saveSettings;
-		this.xClient = new XClient();
+		this.xClient = new XClient(logger);
 		this.deduplicator = new Deduplicator(app, settings);
+		this.logger = logger;
+
+		if (settings.enableRepliesReview && settings.grokApiKey) {
+			this.repliesReviewer = new RepliesReviewer(settings, logger);
+			this.logger?.info("Replies review enabled");
+		}
 	}
 
 	async sync(
@@ -41,8 +53,13 @@ export class SyncEngine {
 			fetched: 0,
 			created: 0,
 			skipped: 0,
+			reviewed: 0,
 			errors: [],
 		};
+
+		this.logger?.info(
+			`Starting ${fullSync ? "full" : "incremental"} sync`
+		);
 
 		try {
 			// Ensure authentication
@@ -68,6 +85,19 @@ export class SyncEngine {
 			// Get existing filenames for uniqueness check
 			const existingFiles =
 				this.deduplicator.getExistingFilenames(folderPath);
+
+			// Build folder→tweet mapping if folder tags enabled
+			const tweetFolderMap = new Map<string, string[]>();
+			if (this.settings.enableFolderTags) {
+				modal.setStatus("Fetching bookmark folders...");
+				await this.buildFolderMap(
+					accessToken,
+					tweetFolderMap
+				);
+				this.logger?.info(
+					`Folder map built: ${tweetFolderMap.size} tweets mapped to folders`
+				);
+			}
 
 			// Fetch bookmarks page by page
 			let paginationToken: string | undefined;
@@ -112,7 +142,8 @@ export class SyncEngine {
 				modal.updateProgress(
 					result.fetched,
 					result.created,
-					result.skipped
+					result.skipped,
+					result.reviewed
 				);
 
 				// Process each tweet
@@ -144,12 +175,16 @@ export class SyncEngine {
 					consecutiveExisting = 0;
 
 					try {
-						await this.processAndWriteTweet(
+						const folderNames = tweetFolderMap.get(tweet.id) || [];
+						const reviewed = await this.processAndWriteTweet(
 							tweet,
 							response,
-							existingFiles
+							existingFiles,
+							accessToken,
+							folderNames
 						);
 						result.created++;
+						if (reviewed) result.reviewed++;
 						modal.updateProgress(
 							result.fetched,
 							result.created,
@@ -177,6 +212,10 @@ export class SyncEngine {
 			// Update last sync timestamp
 			this.settings.lastSyncTimestamp = new Date().toISOString();
 			await this.saveSettings();
+
+			this.logger?.info(
+				`Sync complete: ${result.created} created, ${result.skipped} skipped, ${result.reviewed} reviewed`
+			);
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			result.errors.push(msg);
@@ -188,14 +227,40 @@ export class SyncEngine {
 	private async processAndWriteTweet(
 		tweet: XTweet,
 		response: XBookmarksResponse,
-		existingFiles: Set<string>
-	): Promise<void> {
+		existingFiles: Set<string>,
+		accessToken: string,
+		folderNames: string[] = []
+	): Promise<boolean> {
 		const note = transformTweet(
 			tweet,
 			response.includes,
 			this.settings,
-			existingFiles
+			existingFiles,
+			folderNames
 		);
+
+		// Enrich with replies review if enabled
+		let reviewed = false;
+		if (this.repliesReviewer) {
+			try {
+				const reviewResult =
+					await this.repliesReviewer.reviewTweet(
+						tweet,
+						response.includes,
+						accessToken
+					);
+				if (reviewResult.hasContent) {
+					note.body += "\n\n" + reviewResult.discussionSummary;
+					reviewed = true;
+				}
+			} catch (err) {
+				const msg =
+					err instanceof Error ? err.message : String(err);
+				this.logger?.warn(
+					`Reply review failed for ${tweet.id}: ${msg}`
+				);
+			}
+		}
 
 		const markdown = noteToMarkdown(note);
 		const filePath = `${this.settings.bookmarksFolderPath}/${note.filename}.md`;
@@ -208,6 +273,81 @@ export class SyncEngine {
 
 		// Save after each note for crash safety
 		await this.saveSettings();
+
+		return reviewed;
+	}
+
+	private async buildFolderMap(
+		accessToken: string,
+		tweetFolderMap: Map<string, string[]>
+	): Promise<void> {
+		try {
+			// Fetch folder list
+			const foldersResponse = await this.xClient.fetchBookmarkFolders(
+				this.settings.xUserId,
+				accessToken
+			);
+
+			if (!foldersResponse.data || foldersResponse.data.length === 0) {
+				this.logger?.info("No bookmark folders found");
+				return;
+			}
+
+			// Cache folder names in settings
+			this.settings.cachedFolders = {};
+			for (const folder of foldersResponse.data) {
+				this.settings.cachedFolders[folder.id] = folder.name;
+			}
+			await this.saveSettings();
+
+			const prefix = this.settings.folderTagPrefix || "";
+
+			// For each folder, fetch its tweet IDs
+			for (const folder of foldersResponse.data) {
+				let paginationToken: string | undefined;
+				const tagName = prefix + folder.name;
+
+				this.logger?.debug(
+					`Fetching tweets for folder "${folder.name}" (${folder.id})`
+				);
+
+				do {
+					try {
+						const page =
+							await this.xClient.fetchFolderBookmarksPage(
+								this.settings.xUserId,
+								folder.id,
+								accessToken,
+								paginationToken
+							);
+
+						if (page.data) {
+							for (const tweet of page.data) {
+								const existing =
+									tweetFolderMap.get(tweet.id) || [];
+								existing.push(tagName);
+								tweetFolderMap.set(tweet.id, existing);
+							}
+						}
+
+						paginationToken = page.meta?.next_token;
+					} catch (err) {
+						const msg =
+							err instanceof Error
+								? err.message
+								: String(err);
+						this.logger?.warn(
+							`Failed to fetch bookmarks for folder "${folder.name}": ${msg}`
+						);
+						break;
+					}
+				} while (paginationToken);
+			}
+		} catch (err) {
+			const msg =
+				err instanceof Error ? err.message : String(err);
+			this.logger?.warn(`Failed to fetch bookmark folders: ${msg}`);
+		}
 	}
 
 	private async ensureFolderExists(path: string): Promise<void> {

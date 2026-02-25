@@ -62,7 +62,8 @@ export function transformTweet(
 	tweet: XTweet,
 	includes: XBookmarksResponse["includes"],
 	settings: XBookmarksSyncSettings,
-	existingFiles: Set<string>
+	existingFiles: Set<string>,
+	folderNames: string[] = []
 ): BookmarkNote {
 	const author = findAuthor(tweet, includes);
 	const urls = getAllUrls(tweet);
@@ -89,7 +90,7 @@ export function transformTweet(
 		.map((t) => t.trim())
 		.filter((t) => t.length > 0);
 	const hashtags = extractHashtags(tweet);
-	const tags = [...new Set([...defaultTags, ...hashtags])];
+	const tags = [...new Set([...defaultTags, ...hashtags, ...folderNames])];
 
 	// Format body
 	const body = formatTweetBody(tweet, includes);
