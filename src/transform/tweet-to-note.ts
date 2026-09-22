@@ -153,6 +153,10 @@ export function noteToMarkdown(note: BookmarkNote): string {
 		}
 	}
 
+	if (typeof note.signal === "number") {
+		lines.push(`signal: ${note.signal}`);
+	}
+
 	lines.push(`created: ${note.created}`);
 	if (note.published_date) {
 		lines.push(`published_date: ${note.published_date}`);

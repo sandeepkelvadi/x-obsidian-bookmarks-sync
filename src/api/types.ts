@@ -133,6 +133,8 @@ export interface BookmarkNote {
 	type: string[];
 	link: string;
 	category: string[];
+	/** Jev keep-worthiness, 0..1. Absent when triage did not run. */
+	signal?: number;
 	related_to: string;
 	filename: string;
 	body: string;

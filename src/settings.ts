@@ -1,4 +1,10 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
+import {
+	DEFAULT_CATEGORIES_TEXT,
+	DEFAULT_TAGS_TEXT,
+	parseCategories,
+	parseTags,
+} from "./triage/questions";
 import type XBookmarksSyncPlugin from "./main";
 
 export interface XBookmarksSyncSettings {
@@ -27,6 +33,15 @@ export interface XBookmarksSyncSettings {
 	enableRepliesReview: boolean;
 	grokApiKey: string;
 	maxRepliesToAnalyze: number;
+
+	// Jev triage (TypeSafe System One)
+	enableJevTriage: boolean;
+	typesafeApiKey: string;
+	jevModel: string;
+	jevMinConfidence: number;
+	jevTagMinProb: number;
+	jevCategories: string;
+	jevTags: string;
 
 	// Debug
 	debugLogging: boolean;
@@ -58,6 +73,14 @@ export const DEFAULT_SETTINGS: XBookmarksSyncSettings = {
 	enableRepliesReview: false,
 	grokApiKey: "",
 	maxRepliesToAnalyze: 10,
+
+	enableJevTriage: false,
+	typesafeApiKey: "",
+	jevModel: "jev-1.13.0",
+	jevMinConfidence: 0.5,
+	jevTagMinProb: 0.7,
+	jevCategories: DEFAULT_CATEGORIES_TEXT,
+	jevTags: DEFAULT_TAGS_TEXT,
 
 	debugLogging: false,
 
@@ -381,6 +404,150 @@ export class XBookmarksSyncSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					})
 			);
+
+		// --- Jev Triage Section ---
+		containerEl.createEl("h2", { text: "Triage (Jev)" });
+
+		const triageDesc = containerEl.createDiv("setting-item-description");
+		triageDesc.setText(
+			"Let TypeSafe Jev pick the category and tags for each new bookmark during sync. " +
+				"When Jev is unsure, or the call fails, the note is still written with category: needs-review."
+		);
+		triageDesc.style.marginBottom = "12px";
+
+		new Setting(containerEl)
+			.setName("Enable Jev triage")
+			.setDesc(
+				"Classify each new bookmark before it is written to the vault"
+			)
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.enableJevTriage)
+					.onChange(async (value) => {
+						this.plugin.settings.enableJevTriage = value;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("TypeSafe API key")
+			.setDesc(
+				"Your TypeSafe API key (get one at typesafe.ai). Stored in this vault, not encrypted."
+			)
+			.addText((text) => {
+				text.setPlaceholder("Enter TypeSafe API key")
+					.setValue(this.plugin.settings.typesafeApiKey)
+					.onChange(async (value) => {
+						this.plugin.settings.typesafeApiKey = value.trim();
+						await this.plugin.saveSettings();
+					});
+				text.inputEl.type = "password";
+			});
+
+		new Setting(containerEl)
+			.setName("Jev model")
+			.setDesc(
+				"Pin a version so results stay comparable between runs (default: jev-1.13.0)"
+			)
+			.addText((text) =>
+				text
+					.setPlaceholder("jev-1.13.0")
+					.setValue(this.plugin.settings.jevModel)
+					.onChange(async (value) => {
+						this.plugin.settings.jevModel =
+							value.trim() || "jev-1.13.0";
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("Category confidence threshold")
+			.setDesc(
+				"Below this, category: needs-review is written instead of a label (default: 0.5)"
+			)
+			.addText((text) =>
+				text
+					.setPlaceholder("0.5")
+					.setValue(String(this.plugin.settings.jevMinConfidence))
+					.onChange(async (value) => {
+						const num = parseFloat(value);
+						this.plugin.settings.jevMinConfidence =
+							Number.isFinite(num)
+								? Math.max(0, Math.min(1, num))
+								: 0.5;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("Tag probability threshold")
+			.setDesc(
+				"A tag is added only above this probability (default: 0.7)"
+			)
+			.addText((text) =>
+				text
+					.setPlaceholder("0.7")
+					.setValue(String(this.plugin.settings.jevTagMinProb))
+					.onChange(async (value) => {
+						const num = parseFloat(value);
+						this.plugin.settings.jevTagMinProb = Number.isFinite(
+							num
+						)
+							? Math.max(0, Math.min(1, num))
+							: 0.7;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("Categories")
+			.setDesc(
+				"One per line, as \"Label: what goes here\". The label is written to category:. " +
+					"An \"Other\" exit is added for you if you leave it out."
+			)
+			.addTextArea((ta) => {
+				ta.setPlaceholder(DEFAULT_CATEGORIES_TEXT)
+					.setValue(this.plugin.settings.jevCategories)
+					.onChange(async (value) => {
+						this.plugin.settings.jevCategories = value;
+						await this.plugin.saveSettings();
+						renderCounts();
+					});
+				ta.inputEl.rows = 10;
+				ta.inputEl.style.width = "100%";
+			});
+
+		new Setting(containerEl)
+			.setName("Tags")
+			.setDesc(
+				"One per line, as \"tag: what it means\". Jev is asked about each one separately, " +
+					"so a long list costs more. Leave empty to add no tags."
+			)
+			.addTextArea((ta) => {
+				ta.setPlaceholder(DEFAULT_TAGS_TEXT)
+					.setValue(this.plugin.settings.jevTags)
+					.onChange(async (value) => {
+						this.plugin.settings.jevTags = value;
+						await this.plugin.saveSettings();
+						renderCounts();
+					});
+				ta.inputEl.rows = 10;
+				ta.inputEl.style.width = "100%";
+			});
+
+		const counts = containerEl.createDiv("setting-item-description");
+		const renderCounts = () => {
+			const nCat = Object.keys(
+				parseCategories(this.plugin.settings.jevCategories)
+			).length;
+			const nTag = Object.keys(
+				parseTags(this.plugin.settings.jevTags)
+			).length;
+			counts.setText(
+				`${nCat} categories, ${nTag} tags. Each bookmark costs 1 request with ${nTag + 3} questions in it.`
+			);
+		};
+		renderCounts();
 
 		// --- Sync Status Section ---
 		containerEl.createEl("h2", { text: "Sync Status" });

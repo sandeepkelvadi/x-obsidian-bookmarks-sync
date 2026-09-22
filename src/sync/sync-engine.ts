@@ -6,6 +6,8 @@ import { ensureValidToken } from "../auth/oauth";
 import { Deduplicator } from "./deduplicator";
 import { RepliesReviewer } from "./replies-reviewer";
 import { transformTweet, noteToMarkdown } from "../transform/tweet-to-note";
+import { JevClient } from "../triage/jev-client";
+import { NEEDS_REVIEW, parseTaxonomy } from "../triage/questions";
 import { SyncStatusModal } from "../ui/sync-status-modal";
 import type { Logger } from "../utils/logger";
 
@@ -24,6 +26,7 @@ export class SyncEngine {
 	private xClient: XClient;
 	private deduplicator: Deduplicator;
 	private repliesReviewer: RepliesReviewer | null = null;
+	private jevClient: JevClient | null = null;
 	private logger?: Logger;
 
 	constructor(
@@ -42,6 +45,30 @@ export class SyncEngine {
 		if (settings.enableRepliesReview && settings.grokApiKey) {
 			this.repliesReviewer = new RepliesReviewer(settings, logger);
 			this.logger?.info("Replies review enabled");
+		}
+
+		if (settings.enableJevTriage && settings.typesafeApiKey) {
+			const taxonomy = parseTaxonomy(
+				settings.jevCategories,
+				settings.jevTags
+			);
+			this.jevClient = new JevClient({
+				apiKey: settings.typesafeApiKey,
+				taxonomy,
+				model: settings.jevModel,
+				minConfidence: settings.jevMinConfidence,
+				tagMinProb: settings.jevTagMinProb,
+				logger,
+			});
+			this.logger?.info(
+				`Jev triage enabled on ${settings.jevModel}: ` +
+					`${Object.keys(taxonomy.categories).length} categories, ` +
+					`${Object.keys(taxonomy.tags).length} tags`
+			);
+		} else if (settings.enableJevTriage) {
+			this.logger?.warn(
+				"Jev triage is on but no TypeSafe API key is set; skipping triage"
+			);
 		}
 	}
 
@@ -258,6 +285,40 @@ export class SyncEngine {
 					err instanceof Error ? err.message : String(err);
 				this.logger?.warn(
 					`Reply review failed for ${tweet.id}: ${msg}`
+				);
+			}
+		}
+
+		// Triage with Jev. Runs after the replies review so Jev reads the
+		// fuller body, matching what the backfill script saw. A failure here
+		// never blocks the write: the note lands with category: needs-review.
+		if (this.jevClient) {
+			const triage = await this.jevClient.triage({
+				title: note.title,
+				description: note.description,
+				url: note.link,
+				author: note.author[0] || "",
+				type: note.type[0] || "",
+				body: note.body,
+			});
+
+			if (note.category.length === 0) {
+				note.category = [triage.category];
+			}
+			note.tags = [...new Set([...note.tags, ...triage.tags])];
+			// No signal on a not-checked result: 0 would read as a low score.
+			if (triage.checked !== false) {
+				note.signal = triage.signal;
+			}
+
+			this.logger?.debug(
+				`Jev ${tweet.id}: ${triage.category} ` +
+					`(${triage.categoryChoice} ${triage.categoryConfidence.toFixed(2)}), ` +
+					`tags [${triage.tags.join(", ")}], signal ${triage.signal}`
+			);
+			if (triage.category === NEEDS_REVIEW) {
+				this.logger?.info(
+					`Jev was unsure about ${tweet.id}; wrote ${NEEDS_REVIEW}`
 				);
 			}
 		}

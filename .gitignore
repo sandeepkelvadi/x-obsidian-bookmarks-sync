@@ -25,3 +25,16 @@ Thumbs.db
 # npm
 *.tgz
 npm-debug.log*
+
+# Jev triage run artefacts (cache, dry-run tables)
+output/
+
+# Personal working files: specs, one-off migration scripts, and the
+# categories/tags taxonomy. All vault-specific, so they stay local.
+specs/
+scripts/
+taxonomy.local.*
+*.local.json
+
+# Local tool config
+.infisical.json
