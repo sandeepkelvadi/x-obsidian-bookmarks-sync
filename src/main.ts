@@ -348,8 +348,9 @@ export default class XBookmarksSyncPlugin extends Plugin {
 			);
 			const count = await engine.rebuildIndex();
 			await this.saveSettings();
+			const total = Object.keys(this.settings.syncedTweetIds).length;
 			this.showNotice(
-				`Sync index rebuilt: ${count} existing bookmark(s) found.`
+				`Sync index rebuilt: ${count} note(s) scanned, ${total} bookmark(s) known.`
 			);
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);

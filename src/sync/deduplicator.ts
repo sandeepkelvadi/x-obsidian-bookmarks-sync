@@ -26,6 +26,21 @@ export class Deduplicator {
 		this.settings.syncedTweetIds[tweetId] = filename;
 	}
 
+	/**
+	 * Rebuild the synced-id index by scanning the notes on disk.
+	 *
+	 * Read `source:` first. It is the tweet permalink on every note. `link:`
+	 * is the URL the tweet shared, so on a note that links out to YouTube or
+	 * GitHub it carries no tweet id at all — reading it alone silently drops
+	 * those notes from the index, and the next sync saves them again as
+	 * duplicates. `link:` stays as a fallback for notes that have no
+	 * `source:`, and for older notes written before the field existed.
+	 *
+	 * The result is merged into the existing index, never swapped for it. A
+	 * note whose frontmatter was edited by hand can yield no id at all, and
+	 * dropping that id costs a duplicate note, while keeping a stale id costs
+	 * nothing. Returns the number of notes the scan indexed.
+	 */
 	async rebuildIndex(folderPath: string): Promise<number> {
 		const newIndex: Record<string, string> = {};
 		let count = 0;
@@ -39,21 +54,33 @@ export class Deduplicator {
 
 		for (const file of files) {
 			try {
-				const cache = this.app.metadataCache.getFileCache(file);
-				const link = cache?.frontmatter?.link;
-				if (link && typeof link === "string") {
-					const tweetId = extractTweetIdFromUrl(link);
-					if (tweetId) {
-						newIndex[tweetId] = file.name;
-						count++;
+				const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
+				if (!fm) continue;
+				let tweetId: string | null = null;
+				for (const field of ["source", "link"]) {
+					const value = fm[field];
+					if (value && typeof value === "string") {
+						tweetId = extractTweetIdFromUrl(value);
+						if (tweetId) break;
 					}
+				}
+				if (tweetId && !(tweetId in newIndex)) {
+					newIndex[tweetId] = file.name;
+					count++;
 				}
 			} catch {
 				// Skip files that can't be read
 			}
 		}
 
-		this.settings.syncedTweetIds = newIndex;
+		// Merge rather than replace. A note whose frontmatter was edited by
+		// hand, or whose id cannot be recovered from either field, would
+		// otherwise fall out of the index and be re-downloaded.
+		const merged: Record<string, string> = {
+			...this.settings.syncedTweetIds,
+			...newIndex,
+		};
+		this.settings.syncedTweetIds = merged;
 		return count;
 	}
 
